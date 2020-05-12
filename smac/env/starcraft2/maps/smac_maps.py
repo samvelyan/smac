@@ -248,6 +248,15 @@ map_param_registry = {
         "unit_type_bits": 0,
         "map_type": "colossus",
     },
+    "door1": {
+        "n_agents": 3,
+        "n_enemies": 3,
+        "limit": 300,
+        "a_race": "T",
+        "b_race": "T",
+        "unit_type_bits": 0,
+        "map_type": "door",
+    },
 }
 
 

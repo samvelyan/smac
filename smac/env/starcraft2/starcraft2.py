@@ -47,6 +47,8 @@ actions = {
     "attack": 23,  # target: PointOrUnit
     "stop": 4,  # target: None
     "heal": 386,  # Unit
+    "lower": 556, # SupplyDepot_Lower_quick
+    "raise": 558, # SupplyDepot_Raise_quick
 }
 
 
@@ -237,11 +239,6 @@ class StarCraft2Env(MultiAgentEnv):
         self.replay_dir = replay_dir
         self.replay_prefix = replay_prefix
 
-        # Actions
-        self.n_actions_no_attack = 6
-        self.n_actions_move = 4
-        self.n_actions = self.n_actions_no_attack + self.n_enemies
-
         # Map info
         self._agent_race = map_params["a_race"]
         self._bot_race = map_params["b_race"]
@@ -253,6 +250,14 @@ class StarCraft2Env(MultiAgentEnv):
         self.max_reward = (
             self.n_enemies * self.reward_death_value + self.reward_win
         )
+
+        # Actions
+        self.n_actions_no_attack = 6
+        if self.map_type == "door":
+            self.n_actions_no_attack += 1 # open the door
+        self.n_actions_move = 4
+        self.n_actions = self.n_actions_no_attack + self.n_enemies
+
 
         self.agents = {}
         self.enemies = {}
@@ -417,6 +422,10 @@ class StarCraft2Env(MultiAgentEnv):
             self._controller.actions(req_actions)
             # Make step in SC2, i.e. apply actions
             self._controller.step(self._step_mul)
+
+            if self.call_open_door_callback:
+                self.open_door_callback()
+
             # Observe here so that we know if the episode is over.
             self._obs = self._controller.observe()
         except (protocol.ProtocolError, protocol.ConnectionError):
@@ -540,6 +549,15 @@ class StarCraft2Env(MultiAgentEnv):
                 queue_command=False)
             if self.debug:
                 logging.debug("Agent {}: Move West".format(a_id))
+        elif self.map_type == "door" and not self.depot_open and action == 6:
+            if self.check_all_in_region():
+                cmd = r_pb.ActionRawUnitCommand(
+                    ability_id=actions["lower"],
+                    unit_tags=[self.depot.tag],
+                    queue_command=False)
+                self.call_open_door_callback = True
+            else:
+                return None # do nothing
         else:
             # attack/heal units that are in range
             target_id = action - self.n_actions_no_attack
@@ -565,6 +583,35 @@ class StarCraft2Env(MultiAgentEnv):
 
         sc_action = sc_pb.Action(action_raw=r_pb.ActionRaw(unit_command=cmd))
         return sc_action
+
+    def check_all_in_region(self):
+        for a_id in range(self.n_agents):
+            x = self.agents[a_id].pos.x
+            y = self.agents[a_id].pos.y
+
+            if not (self.x_region_min < x < self.x_region_max and
+                self.y_region_min < y < self.y_region_max):
+                return False
+
+        print("Everyone is IN!!!!!!!!!!")
+        return True
+
+    def open_door_callback(self):
+        # Update pathing grid #TODO CHECK
+        map_info = self._controller.game_info().start_raw
+        if map_info.pathing_grid.bits_per_pixel == 1:
+            vals = np.array(list(map_info.pathing_grid.data)).reshape(
+                self.map_x, int(self.map_y / 8))
+            self.pathing_grid = np.transpose(np.array([
+                [(b >> i) & 1 for b in row for i in range(7, -1, -1)]
+                for row in vals], dtype=np.bool))
+        else:
+            self.pathing_grid = np.invert(np.flip(np.transpose(np.array(
+                list(map_info.pathing_grid.data), dtype=np.bool).reshape(
+                    self.map_x, self.map_y)), axis=1))
+
+        self.depot_open = True
+        self.call_open_door_callback = False
 
     def get_agent_action_heuristic(self, a_id, action):
         unit = self.get_unit_by_id(a_id)
@@ -1195,12 +1242,12 @@ class StarCraft2Env(MultiAgentEnv):
         return size
 
     def get_visibility_matrix(self):
-        """Returns a boolean numpy array of dimensions 
+        """Returns a boolean numpy array of dimensions
         (n_agents, n_agents + n_enemies) indicating which units
         are visible to each agent.
         """
         arr = np.zeros(
-            (self.n_agents, self.n_agents + self.n_enemies), 
+            (self.n_agents, self.n_agents + self.n_enemies),
             dtype=np.bool,
         )
 
@@ -1223,7 +1270,7 @@ class StarCraft2Env(MultiAgentEnv):
 
                 # The matrix for allies is filled symmetrically
                 al_ids = [
-                    al_id for al_id in range(self.n_agents) 
+                    al_id for al_id in range(self.n_agents)
                     if al_id > agent_id
                 ]
                 for i, al_id in enumerate(al_ids):
@@ -1232,7 +1279,7 @@ class StarCraft2Env(MultiAgentEnv):
                     al_y = al_unit.pos.y
                     dist = self.distance(x, y, al_x, al_y)
 
-                    if (dist < sight_range and al_unit.health > 0):  
+                    if (dist < sight_range and al_unit.health > 0):
                         # visible and alive
                         arr[agent_id, al_id] = arr[al_id, agent_id] = 1
 
@@ -1341,6 +1388,8 @@ class StarCraft2Env(MultiAgentEnv):
         units_alive = [
             unit.tag for unit in self.agents.values() if unit.health > 0
         ] + [unit.tag for unit in self.enemies.values() if unit.health > 0]
+        if self.map_type == 'door':
+            units_alive += [self.depot.tag]
         debug_command = [
             d_pb.DebugCommand(kill_unit=d_pb.DebugKillUnit(tag=units_alive))
         ]
@@ -1363,6 +1412,15 @@ class StarCraft2Env(MultiAgentEnv):
                 key=attrgetter("unit_type", "pos.x", "pos.y"),
                 reverse=False,
             )
+
+            if self.map_type == "door" and len(ally_units_sorted) == self.n_agents + 1:
+                self.depot = ally_units_sorted.pop(0)
+                self.depot_open = False
+                self.call_open_door_callback = False
+                self.x_region_max = 13.3
+                self.x_region_min = 11
+                self.y_region_max = 16
+                self.y_region_min = 4.7
 
             for i in range(len(ally_units_sorted)):
                 self.agents[i] = ally_units_sorted[i]
@@ -1476,6 +1534,8 @@ class StarCraft2Env(MultiAgentEnv):
         elif self.map_type == "bane":
             self.baneling_id = min_unit_type
             self.zergling_id = min_unit_type + 1
+        elif self.map_type == "door":
+            self.marine_id = min_unit_type
 
     def only_medivac_left(self, ally):
         """Check if only Medivac units are left."""

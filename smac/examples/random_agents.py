@@ -32,12 +32,13 @@ def main():
                 action = np.random.choice(avail_actions_ind)
                 if i < 6 and avail_actions[4] == 1:
                     action = 4
-                elif i < 21 and avail_actions[3] == 1:
+                elif i < 22 and avail_actions[3] == 1:
                     action = 3
-                elif i < 23 and avail_actions[4] == 1:
+                elif i < 24 and avail_actions[4] == 1:
                     action = 4
-                else:
+                elif i < 25:
                     action = 6
+
                 actions.append(action)
 
             reward, terminated, _ = env.step(actions)

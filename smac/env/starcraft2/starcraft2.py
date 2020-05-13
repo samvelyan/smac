@@ -410,6 +410,9 @@ class StarCraft2Env(MultiAgentEnv):
         if self.debug:
             logging.debug("Actions".center(60, "-"))
 
+        if self.map_type == "door":
+            self.door_condition_met = self.check_door_conditions(actions)
+
         for a_id, action in enumerate(actions_int):
             if not self.heuristic_ai:
                 sc_action = self.get_agent_action(a_id, action)
@@ -419,9 +422,6 @@ class StarCraft2Env(MultiAgentEnv):
                 actions[a_id] = action_num
             if sc_action:
                 sc_actions.append(sc_action)
-
-        if self.map_type == "door":
-            self.door_condition_met = self.check_door_conditions(actions)
 
         # Send action request
         req_actions = sc_pb.RequestAction(actions=sc_actions)

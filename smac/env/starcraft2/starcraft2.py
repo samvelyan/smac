@@ -255,6 +255,10 @@ class StarCraft2Env(MultiAgentEnv):
         self.n_actions_no_attack = 6
         if self.map_type == "door":
             self.n_actions_no_attack += 1 # open the door
+            self.x_region_max = 16.3
+            self.x_region_min = 13.3
+            self.y_region_max = 11
+            self.y_region_min = 4.7
         self.n_actions_move = 4
         self.n_actions = self.n_actions_no_attack + self.n_enemies
 
@@ -416,16 +420,15 @@ class StarCraft2Env(MultiAgentEnv):
             if sc_action:
                 sc_actions.append(sc_action)
 
+        if self.map_type == "door":
+            self.door_condition_met = self.check_door_conditions(actions)
+
         # Send action request
         req_actions = sc_pb.RequestAction(actions=sc_actions)
         try:
             self._controller.actions(req_actions)
             # Make step in SC2, i.e. apply actions
             self._controller.step(self._step_mul)
-
-            if self.call_open_door_callback:
-                self.open_door_callback()
-
             # Observe here so that we know if the episode is over.
             self._obs = self._controller.observe()
         except (protocol.ProtocolError, protocol.ConnectionError):
@@ -549,13 +552,13 @@ class StarCraft2Env(MultiAgentEnv):
                 queue_command=False)
             if self.debug:
                 logging.debug("Agent {}: Move West".format(a_id))
-        elif self.map_type == "door" and not self.depot_open and action == 6:
-            if self.check_all_in_region():
+        elif self.map_type == "door" and action == 6:
+            if self.door_condition_met:
                 cmd = r_pb.ActionRawUnitCommand(
                     ability_id=actions["lower"],
                     unit_tags=[self.depot.tag],
                     queue_command=False)
-                self.call_open_door_callback = True
+                self.depot_open = True
             else:
                 return None # do nothing
         else:
@@ -584,7 +587,14 @@ class StarCraft2Env(MultiAgentEnv):
         sc_action = sc_pb.Action(action_raw=r_pb.ActionRaw(unit_command=cmd))
         return sc_action
 
-    def check_all_in_region(self):
+    def check_door_conditions(self, actions):
+        if self.depot_open:
+            return False
+
+        for action in actions:
+            if action != 6:
+                return False
+
         for a_id in range(self.n_agents):
             x = self.agents[a_id].pos.x
             y = self.agents[a_id].pos.y
@@ -593,25 +603,7 @@ class StarCraft2Env(MultiAgentEnv):
                 self.y_region_min < y < self.y_region_max):
                 return False
 
-        print("Everyone is IN!!!!!!!!!!")
         return True
-
-    def open_door_callback(self):
-        # Update pathing grid #TODO CHECK
-        map_info = self._controller.game_info().start_raw
-        if map_info.pathing_grid.bits_per_pixel == 1:
-            vals = np.array(list(map_info.pathing_grid.data)).reshape(
-                self.map_x, int(self.map_y / 8))
-            self.pathing_grid = np.transpose(np.array([
-                [(b >> i) & 1 for b in row for i in range(7, -1, -1)]
-                for row in vals], dtype=np.bool))
-        else:
-            self.pathing_grid = np.invert(np.flip(np.transpose(np.array(
-                list(map_info.pathing_grid.data), dtype=np.bool).reshape(
-                    self.map_x, self.map_y)), axis=1))
-
-        self.depot_open = True
-        self.call_open_door_callback = False
 
     def get_agent_action_heuristic(self, a_id, action):
         unit = self.get_unit_by_id(a_id)
@@ -1336,6 +1328,9 @@ class StarCraft2Env(MultiAgentEnv):
             if self.can_move(unit, Direction.WEST):
                 avail_actions[5] = 1
 
+            if self.map_type == "door":
+                avail_actions[6] = 1
+
             # Can attack only alive units that are alive in the shooting range
             shoot_range = self.unit_shoot_range(agent_id)
 
@@ -1416,11 +1411,7 @@ class StarCraft2Env(MultiAgentEnv):
             if self.map_type == "door" and len(ally_units_sorted) == self.n_agents + 1:
                 self.depot = ally_units_sorted.pop(0)
                 self.depot_open = False
-                self.call_open_door_callback = False
-                self.x_region_max = 13.3
-                self.x_region_min = 11
-                self.y_region_max = 16
-                self.y_region_min = 4.7
+                self.door_condition_met = False
 
             for i in range(len(ally_units_sorted)):
                 self.agents[i] = ally_units_sorted[i]

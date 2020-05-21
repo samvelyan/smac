@@ -903,6 +903,9 @@ class StarCraft2Env(MultiAgentEnv):
         ally_feats_dim = self.get_obs_ally_feats_size()
         own_feats_dim = self.get_obs_own_feats_size()
 
+        if self.map_type == "door":
+            move_feats_dim += 1
+
         move_feats = np.zeros(move_feats_dim, dtype=np.float32)
         enemy_feats = np.zeros(enemy_feats_dim, dtype=np.float32)
         ally_feats = np.zeros(ally_feats_dim, dtype=np.float32)
@@ -928,6 +931,10 @@ class StarCraft2Env(MultiAgentEnv):
 
             if self.obs_terrain_height:
                 move_feats[ind:] = self.get_surrounding_height(unit)
+
+            if self.map_type == "door":
+                if self.depot_open and self.distance(x, y, self.depot.pos.x, self.depot.pos.y) < sight_range:
+                    move_feats[-1] = 1
 
             # Enemy features
             for e_id, e_unit in self.enemies.items():
@@ -1143,6 +1150,9 @@ class StarCraft2Env(MultiAgentEnv):
             state = np.append(state,
                               self._episode_steps / self.episode_limit)
 
+        if self.map_type == "door":
+            state = np.append(state, self.depot_open)
+
         state = state.astype(dtype=np.float32)
 
         if self.debug:
@@ -1151,6 +1161,8 @@ class StarCraft2Env(MultiAgentEnv):
             logging.debug("Enemy state {}".format(enemy_state))
             if self.state_last_action:
                 logging.debug("Last actions {}".format(self.last_action))
+            if self.map_type == "door":
+                logging.debug("Depot open  {}".format(self.depot_open))
 
         return state
 
@@ -1211,6 +1223,9 @@ class StarCraft2Env(MultiAgentEnv):
         enemy_feats = n_enemies * n_enemy_feats
         ally_feats = n_allies * n_ally_feats
 
+        if self.map_type == "door":
+            move_feats += 1
+
         return move_feats + enemy_feats + ally_feats + own_feats
 
     def get_state_size(self):
@@ -1229,6 +1244,9 @@ class StarCraft2Env(MultiAgentEnv):
         if self.state_last_action:
             size += self.n_agents * self.n_actions
         if self.state_timestep_number:
+            size += 1
+
+        if self.map_type == "door":
             size += 1
 
         return size
